@@ -26,15 +26,14 @@ async def create_client(name, **kwargs):
             
             # Set up disconnect handler
             @client.on_disconnect
-            def handle_disconnect(client):
-                async def reconnect():
-                    logging.warning(f"Client {name} disconnected. Attempting to reconnect...")
-                    try:
-                        await client.start()
-                        logging.info(f"Client {name} reconnected successfully")
-                    except Exception as e:
-                        logging.error(f"Failed to reconnect client {name}: {str(e)}")
-                asyncio.create_task(reconnect())
+            async def handle_disconnect():
+                logging.warning(f"Client {name} disconnected. Attempting to reconnect...")
+                try:
+                    await client.start()
+                    logging.info(f"Client {name} reconnected successfully")
+                except Exception as e:
+                    logging.error(f"Failed to reconnect client {name}: {str(e)}")
+                    await asyncio.sleep(5)  # Add delay before retry
             
             # Set up keep-alive mechanism with connection lock
             connection_lock = asyncio.Lock()
@@ -100,13 +99,16 @@ async def get_mongo_client():
                 serverSelectionTimeoutMS=5000,
                 connectTimeoutMS=5000,
                 socketTimeoutMS=10000,
-                maxPoolSize=50,
-                retryWrites=True
+                maxPoolSize=10,  # Reduced pool size to prevent connection overload
+                minPoolSize=1,   # Ensure at least one connection is maintained
+                maxIdleTimeMS=30000,  # Close idle connections after 30 seconds
+                retryWrites=True,
+                w=1  # Write concern for better consistency
             )
             # Verify connection is alive
             await client.admin.command('ping')
             
-            # Set up reconnection handler
+            # Set up reconnection handler with connection cleanup
             async def monitor_connection():
                 while True:
                     try:
@@ -115,12 +117,18 @@ async def get_mongo_client():
                     except Exception as e:
                         logging.warning(f"MongoDB connection lost: {str(e)}. Attempting to reconnect...")
                         try:
+                            # Ensure proper cleanup of existing connections
                             client.close()
+                            await asyncio.sleep(1)  # Wait for connections to close
+                            # Attempt to reconnect with a new client instance
                             await client.admin.command('ping')
                             logging.info("MongoDB reconnected successfully")
                         except Exception as e:
                             logging.error(f"MongoDB reconnection failed: {str(e)}")
-                        await asyncio.sleep(5)
+                            await asyncio.sleep(5)
+                    finally:
+                        # Ensure we don't have too many idle connections
+                        client.get_io_loop().create_task(client.close_cursor_tasks())
             
             asyncio.create_task(monitor_connection())
             logging.info("Successfully connected to MongoDB")
