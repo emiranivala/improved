@@ -26,20 +26,24 @@ async def create_client(name, **kwargs):
             
             # Set up disconnect handler
             @client.on_disconnect
-            async def handle_disconnect():
-                logging.warning(f"Client {name} disconnected. Attempting to reconnect...")
-                try:
-                    await client.start()
-                    logging.info(f"Client {name} reconnected successfully")
-                except Exception as e:
-                    logging.error(f"Failed to reconnect client {name}: {str(e)}")
+            def handle_disconnect(client):
+                async def reconnect():
+                    logging.warning(f"Client {name} disconnected. Attempting to reconnect...")
+                    try:
+                        await client.start()
+                        logging.info(f"Client {name} reconnected successfully")
+                    except Exception as e:
+                        logging.error(f"Failed to reconnect client {name}: {str(e)}")
+                asyncio.create_task(reconnect())
             
-            # Set up keep-alive mechanism
+            # Set up keep-alive mechanism with connection lock
+            connection_lock = asyncio.Lock()
             async def keep_alive():
                 while True:
                     try:
-                        if not client.is_connected:
-                            await client.start()
+                        async with connection_lock:
+                            if not client.is_connected:
+                                await client.start()
                         await asyncio.sleep(300)  # Check every 5 minutes
                     except Exception as e:
                         logging.warning(f"Keep-alive check failed for {name}: {str(e)}")
